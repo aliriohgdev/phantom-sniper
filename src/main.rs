@@ -308,6 +308,12 @@ impl Sniper {
         let token_symbol: Option<String> = decoded_params.as_ref().map(|d| d.params.symbol.clone());
         let dev_buy_cost: Option<U256> = decoded_params.as_ref().map(|d| d.params.fee2);
 
+        // ---- FILTER 0: Dev blacklist ----
+        if DEV_BLACKLIST.contains(&from_addr) {
+            info!("⏭️  Skipping token: developer {:?} is blacklisted", from_addr);
+            return Ok(());
+        }
+
         // ---- FILTER 1: Min dev buy ----
         let min_dev_buy_wei = alloy::primitives::utils::parse_ether(&MIN_DEV_BUY_BNB.to_string())?;
         match dev_buy_cost {

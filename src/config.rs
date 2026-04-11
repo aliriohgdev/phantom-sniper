@@ -109,6 +109,19 @@ pub static FRONTRUN_GAS_PREMIUM: LazyLock<u128> = LazyLock::new(|| {
 
 // ============== Filters ==============
 
+/// Comma-separated list of developer addresses to blacklist.
+/// Tokens created by these addresses are always skipped.
+pub static DEV_BLACKLIST: LazyLock<Vec<Address>> = LazyLock::new(|| {
+    env::var("DEV_BLACKLIST")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .filter_map(|addr| addr.trim().parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+});
+
 /// Minimum dev initial buy (BNB). Tokens with dev buy below this are skipped as spam.
 pub static MIN_DEV_BUY_BNB: LazyLock<f64> = LazyLock::new(|| {
     env::var("MIN_DEV_BUY_BNB")

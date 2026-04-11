@@ -3,6 +3,5 @@
     "allow": [
       "WebFetch(alloy.rs)"
     ]
-  },
-  "$version": 3
+  }
 }

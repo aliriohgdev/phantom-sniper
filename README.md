@@ -102,6 +102,7 @@ All configuration is via `.env` file. Copy `.env.example` to `.env` and adjust v
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MIN_DEV_BUY_BNB` | `0.05` | Min dev initial buy to consider token (BNB). Below = spam |
+| `DEV_BLACKLIST` | _(empty)_ | Comma-separated developer addresses to always skip |
 | `DEV_RATE_LIMIT_COUNT` | `3` | Max token creations per dev within window before blocking |
 | `DEV_RATE_LIMIT_WINDOW_SECS` | `3600` | Rate limit window (seconds) |
 
