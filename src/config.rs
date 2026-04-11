@@ -15,7 +15,7 @@ pub static BSC_WS: LazyLock<String> =
 /// If set and the IPC socket exists, it is used instead of WebSocket.
 /// Typical geth default: `/home/user/.ethereum/geth.ipc`
 pub static BSC_IPC: LazyLock<Option<String>> =
-    LazyLock::new(|| env::var("BSC_IPC").unwrap_or_else(|_| "/opt/bsc-data/geth.ipc".to_string()));
+    LazyLock::new(|| env::var("BSC_IPC").ok().or_else(|| Some("/opt/bsc-data/geth.ipc".to_string())));
 
 
 pub static PUISSANT_RPC: LazyLock<String> = LazyLock::new(|| {

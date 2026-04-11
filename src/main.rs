@@ -1433,7 +1433,7 @@ async fn run_subscription(sniper: Arc<Sniper>) -> Result<()> {
     // Determine transport: IPC > WS (IPC is faster, WS is fallback)
     if let Some(ref ipc_path) = *BSC_IPC {
         if std::path::Path::new(ipc_path).exists() {
-            match run_subscription_ipc(sniper).await {
+            match run_subscription_ipc(sniper.clone()).await {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     warn!(
