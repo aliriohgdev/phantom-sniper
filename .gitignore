@@ -1,0 +1,8 @@
+/target
+.env
+*.log
+*.csv
+td_log/
+logs/
+.DS_Store
+.idea/
