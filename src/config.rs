@@ -17,9 +17,27 @@ pub static BSC_WS: LazyLock<String> =
 pub static BSC_IPC: LazyLock<Option<String>> =
     LazyLock::new(|| env::var("BSC_IPC").ok().or_else(|| Some("/opt/bsc-data/geth.ipc".to_string())));
 
+// ============== MEV Relays ==============
 
-pub static PUISSANT_RPC: LazyLock<String> = LazyLock::new(|| {
-    env::var("PUISSANT_RPC").unwrap_or_else(|_| "https://puissant-builder.48.club".to_string())
+/// 48Club Puissant — ~25% BSC hashrate
+pub static RELAY_48CLUB: LazyLock<String> = LazyLock::new(|| {
+    env::var("RELAY_48CLUB").unwrap_or_else(|_| "https://puissant-bsc.48.club".to_string())
+});
+
+/// BlockRazor Builder — ~37% BSC hashrate
+pub static RELAY_BLOCKRAZOR: LazyLock<String> = LazyLock::new(|| {
+    env::var("RELAY_BLOCKRAZOR")
+        .unwrap_or_else(|_| "https://frankfurt.builder.blockrazor.io".to_string())
+});
+
+/// BlockRazor auth token (required header)
+pub static BLOCKRAZOR_AUTH_TOKEN: LazyLock<Option<String>> =
+    LazyLock::new(|| env::var("BLOCKRAZOR_AUTH_TOKEN").ok());
+
+/// NodeReal MEV — ~5% BSC hashrate
+pub static RELAY_NODEREAL: LazyLock<String> = LazyLock::new(|| {
+    env::var("RELAY_NODEREAL")
+        .unwrap_or_else(|_| "https://bsc-mainnet.nodereal.io/mev/v1/5db9047f23724133b9714f274061db0b".to_string())
 });
 
 // ============== Chain constants ==============
@@ -31,7 +49,7 @@ pub static DEFAULT_GAS_PRICE: LazyLock<u128> = LazyLock::new(|| {
     env::var("DEFAULT_GAS_PRICE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(3_000_000_000) // 3 gwei
+        .unwrap_or(1_500_000_000) // 1.5 gwei
 });
 
 /// Gas limit for buy transactions.

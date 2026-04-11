@@ -70,7 +70,17 @@ All configuration is via `.env` file. Copy `.env.example` to `.env` and adjust v
 | `BSC_RPC` | `http://127.0.0.1:8545` | BSC node HTTP RPC |
 | `BSC_WS` | `ws://127.0.0.1:8546` | BSC node WebSocket |
 | `BSC_IPC` | _(unset)_ | BSC node IPC socket path (if set and exists, used instead of WS) |
-| `PUISSANT_RPC` | `https://puissant-bsc.48.club` | MEV bundle relay |
+
+### MEV Relays
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RELAY_48CLUB` | `https://puissant-bsc.48.club` | 48Club Puissant (~25% BSC hashrate) |
+| `RELAY_BLOCKRAZOR` | `https://frankfurt.builder.blockrazor.io` | BlockRazor Builder (~37% BSC hashrate) |
+| `BLOCKRAZOR_AUTH_TOKEN` | _(unset)_ | BlockRazor Authorization header token |
+| `RELAY_NODEREAL` | _(unset)_ | NodeReal MEV endpoint with API key in URL |
+
+Bundles are dispatched to **all configured relays in parallel** for ~65-70% block coverage.
 
 ### Trading
 
@@ -86,7 +96,7 @@ All configuration is via `.env` file. Copy `.env.example` to `.env` and adjust v
 | `BUY_GAS_LIMIT` | `300000` | Gas limit for buy tx |
 | `APPROVE_GAS_LIMIT` | `100000` | Gas limit for approve tx |
 | `SELL_GAS_LIMIT` | `500000` | Gas limit for sell tx |
-| `DEFAULT_GAS_PRICE` | `3000000000` | Default gas price in wei (3 gwei) |
+| `DEFAULT_GAS_PRICE` | `1500000000` | Default gas price in wei (1.5 gwei) |
 | `FRONTRUN_GAS_PREMIUM` | `5000000000` | Extra gas premium in wei (5 gwei) for frontrun priority |
 | `DUST_AMOUNT_WEI` | `1800000000000` | Dust subtracted from sell amounts to avoid rounding |
 
@@ -126,15 +136,22 @@ All configuration is via `.env` file. Copy `.env.example` to `.env` and adjust v
 
 ## Bundle Strategy
 
-### Backrun (token launch) — Triple-bundle fallback
+### Backrun (token launch) — Multi-relay triple-bundle
 ```
-Bundle A → Block N:   [createToken_tx, our_buy_tx]    ← ideal backrun
-Bundle B → Block N:   [our_buy_tx]                     ← standalone, same block
-Bundle C → Block N+1: [our_buy_tx]                     ← standalone, next block
+                    ┌── Bundle A [CREATE+SNIPE] bloque N   (48spSign ✅)
+          48Club ───┼── Bundle B [SNIPE]        bloque N   (48spSign ✅)
+                    └── Bundle C [SNIPE]        bloque N+1 (48spSign ✅)
+
+                    ┌── Bundle A [CREATE+SNIPE] bloque N   (Authorization ✅)
+    BlockRazor ─────┼── Bundle B [SNIPE]        bloque N   (Authorization ✅)
+                    └── Bundle C [SNIPE]        bloque N+1 (Authorization ✅)
+
+                    ┌── Bundle A [CREATE+SNIPE] bloque N   (API key en URL ✅)
+    NodeReal ───────┼── Bundle B [SNIPE]        bloque N   (API key en URL ✅)
+                    └── Bundle C [SNIPE]        bloque N+1 (API key en URL ✅)
 ```
-All 3 bundles use the same nonce — only one can succeed.
-Bundle A may fail if the block is already mined. B and C catch those cases.
-Bundle C targets block N+1 for when competition pushes the buy to the next block.
+9 requests sent in parallel. Same nonce across all — only one succeeds.
+Covers ~65-70% of BSC blocks (48Club 25% + BlockRazor 37% + NodeReal 5%).
 
 ### Frontrun (dev sells)
 ```
