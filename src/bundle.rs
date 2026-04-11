@@ -129,6 +129,17 @@ impl BundleSender {
         self.send_bundle_with_reverting(signed_txs, current_block, vec![]).await
     }
 
+    /// Send a raw bundle targeting a specific max block number.
+    /// Unlike `send_bundle` (which uses current_block + MAX_BLOCK_DELTA),
+    /// this lets you control the exact target block.
+    pub async fn send_bundle_to_block(
+        &self,
+        signed_txs: Vec<Vec<u8>>,
+        max_block: u64,
+    ) -> Result<BundleResponse> {
+        self.send_bundle_with_reverting_to_block(signed_txs, max_block, vec![]).await
+    }
+
     /// Send a raw bundle with optional reverting tx hashes
     pub async fn send_bundle_with_reverting(
         &self,
@@ -170,6 +181,54 @@ impl BundleSender {
 
         if result.result.is_some() {
             info!("Bundle accepted: {:?}", result.result);
+        } else if result.error.is_some() {
+            error!("Bundle rejected: {:?}", result.error);
+        }
+
+        Ok(result)
+    }
+
+    /// Send a raw bundle with optional reverting tx hashes, targeting a specific block.
+    pub async fn send_bundle_with_reverting_to_block(
+        &self,
+        signed_txs: Vec<Vec<u8>>,
+        max_block: u64,
+        reverting_tx_hashes: Vec<String>,
+    ) -> Result<BundleResponse> {
+        let current_ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+
+        // Sign the bundle for 48SP error details
+        let sp_sign = self.sign_bundle(&signed_txs);
+
+        let txs_hex: Vec<String> = signed_txs
+            .iter()
+            .map(|tx| format!("0x{}", hex::encode(tx)))
+            .collect();
+
+        let request = BundleRequest {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "eth_sendBundle",
+            params: vec![BundleParams {
+                txs: txs_hex,
+                max_block_number: max_block,
+                max_timestamp: current_ts + *MAX_TIMESTAMP_DELTA,
+                reverting_tx_hashes,
+                sp_sign,
+            }],
+        };
+
+        let response = self
+            .client
+            .post(&self.rpc_url)
+            .json(&request)
+            .send()
+            .await?;
+
+        let result: BundleResponse = response.json().await?;
+
+        if result.result.is_some() {
+            info!("Bundle accepted (block {}): {:?}", max_block, result.result);
         } else if result.error.is_some() {
             error!("Bundle rejected: {:?}", result.error);
         }

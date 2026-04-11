@@ -384,7 +384,11 @@ impl Sniper {
             timestamp, separator, separator, predicted_addr, name_str, symbol_str, from_addr, dev_buy_str, separator
         );
 
-        // Build backrun bundle: [raw_create_tx, buy_tx]
+        // ---- Triple-bundle fallback strategy for buy inclusion ----
+        // Bundle A: [createToken, buy] at block N     — ideal backrun (may fail if block already mined)
+        // Bundle B: [buy] at block N                  — standalone, same block (catches if A fails)
+        // Bundle C: [buy] at block N+1                — standalone, next block (catches if N+1 needed)
+        // All 3 use the same nonce, so only ONE can succeed.
         let buy_amount = alloy::primitives::utils::parse_ether(&BUY_AMOUNT_ETH.to_string())?;
         let gas_price = *DEFAULT_GAS_PRICE; // from env
 
@@ -396,8 +400,9 @@ impl Sniper {
                 return Err(e);
             }
         };
-        info!("Using on-chain nonce {} for backrun buy tx", nonce);
+        info!("Using on-chain nonce {} for triple-bundle backrun", nonce);
 
+        // Build buy tx (reused across all 3 bundles)
         let buy_tx = match self
             .trader
             .build_buy_tx_with_nonce(predicted_addr, buy_amount, nonce, gas_price)
@@ -409,31 +414,55 @@ impl Sniper {
             }
         };
 
-        // Send backrun bundle via Puissant
-        // Bundle order: [raw_create_tx, buy_tx]
-        let result = self
+        // Bundle A: [createToken, buy] → block N
+        let result_a = self
             .bundle_sender
-            .send_backrun_bundle(raw_tx, vec![buy_tx], current_block)
+            .send_backrun_bundle(raw_tx.clone(), vec![buy_tx.clone()], current_block)
             .await;
+        info!(
+            "\n[{}]\n{}\n📈 BUNDLE A SENT (backrun)\n{}\n  Token: {:?}\n  Target Block: {}\n  Bundle: [createToken, buy]\n{}\n",
+            timestamp, separator, separator, predicted_addr, current_block, separator
+        );
 
-        match &result {
-            Ok(resp) if resp.result.is_some() => {
-                info!("Bundle accepted: {:?}", resp.result);
-                info!(
-                    "\n[{}]\n{}\n📈 BACKRUN BUNDLE SENT\n{}\n  Token: {:?}\n  Buy Amount: {} BNB\n  Bundle: [createToken, buy]\n{}\n",
-                    timestamp, separator, separator, predicted_addr, *BUY_AMOUNT_ETH, separator
-                );
-            }
-            Ok(resp) => {
-                warn!("Bundle rejected: {:?}", resp.error);
-                if resp.is_nonce_error_for(self.trader.address()) {
-                    warn!("Nonce error detected, syncing...");
-                    let _ = self.trader.force_sync_nonce().await;
-                }
-            }
-            Err(e) => {
-                error!("Bundle send failed: {}", e);
-            }
+        // Bundle B: [buy] → block N (standalone, same block)
+        let result_b = self
+            .bundle_sender
+            .send_bundle_to_block(vec![buy_tx.clone()], current_block)
+            .await;
+        info!(
+            "\n[{}]\n{}\n📈 BUNDLE B SENT (standalone)\n{}\n  Token: {:?}\n  Target Block: {}\n  Bundle: [buy]\n{}\n",
+            timestamp, separator, separator, predicted_addr, current_block, separator
+        );
+
+        // Bundle C: [buy] → block N+1 (standalone, next block)
+        let next_block = current_block + 1;
+        let result_c = self
+            .bundle_sender
+            .send_bundle_to_block(vec![buy_tx.clone()], next_block)
+            .await;
+        info!(
+            "\n[{}]\n{}\n📈 BUNDLE C SENT (next block)\n{}\n  Token: {:?}\n  Target Block: {}\n  Bundle: [buy]\n{}\n",
+            timestamp, separator, separator, predicted_addr, next_block, separator
+        );
+
+        // Log combined result
+        let any_accepted = result_a.as_ref().map(|r| r.result.is_some()).unwrap_or(false)
+            || result_b.as_ref().map(|r| r.result.is_some()).unwrap_or(false)
+            || result_c.as_ref().map(|r| r.result.is_some()).unwrap_or(false);
+
+        if any_accepted {
+            info!(
+                "✓ At least one bundle accepted for token {:?} at blocks {}-{}",
+                predicted_addr, current_block, next_block
+            );
+        } else {
+            warn!(
+                "✗ All bundles rejected for token {:?}: A={:?}, B={:?}, C={:?}",
+                predicted_addr,
+                result_a.as_ref().map(|r| &r.error),
+                result_b.as_ref().map(|r| &r.error),
+                result_c.as_ref().map(|r| &r.error),
+            );
         }
 
         // Store token in memory for dev exit tracking

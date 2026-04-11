@@ -126,11 +126,15 @@ All configuration is via `.env` file. Copy `.env.example` to `.env` and adjust v
 
 ## Bundle Strategy
 
-### Backrun (token launch)
+### Backrun (token launch) — Triple-bundle fallback
 ```
-Block N: [createToken_tx, our_buy_tx]
+Bundle A → Block N:   [createToken_tx, our_buy_tx]    ← ideal backrun
+Bundle B → Block N:   [our_buy_tx]                     ← standalone, same block
+Bundle C → Block N+1: [our_buy_tx]                     ← standalone, next block
 ```
-Bot predicts token address from calldata via CREATE2, builds buy tx immediately.
+All 3 bundles use the same nonce — only one can succeed.
+Bundle A may fail if the block is already mined. B and C catch those cases.
+Bundle C targets block N+1 for when competition pushes the buy to the next block.
 
 ### Frontrun (dev sells)
 ```
