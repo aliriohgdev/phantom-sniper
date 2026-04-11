@@ -1019,7 +1019,7 @@ async fn main() -> Result<()> {
 
                                 // Check if we hit stop-loss: bnb_out < peak * (1 - SL/100)
                                 let sl_threshold = new_peak
-                                    * U256::from((10000u64 - (sl_target * 100.0) as u64))
+                                    * U256::from(10000u64 - (sl_target * 100.0) as u64)
                                     / U256::from(10000);
                                 if bnb_out < sl_threshold {
                                     let drop_pct = if new_peak.is_zero() {

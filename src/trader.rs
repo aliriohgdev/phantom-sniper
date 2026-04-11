@@ -3,7 +3,6 @@ use alloy::{
     network::{EthereumWallet, TxSigner},
     primitives::{Address, TxKind, U256},
     providers::{Provider, ProviderBuilder},
-    rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
 };
 use eyre::Result;
