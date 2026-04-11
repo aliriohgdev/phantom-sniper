@@ -120,6 +120,8 @@ All configuration is via `.env` file. Copy `.env.example` to `.env` and adjust v
 |----------|---------|-------------|
 | `POSITION_VERIFY_DELAY_SECS` | `9` | Seconds to wait after backrun to verify token balance |
 | `POSITION_TTL_SECS` | `1800` | Max hold time before auto-sell (seconds, 0 = disabled) |
+| `TAKE_PROFIT_PCT` | `0` | Sell when profit hits this % above cost (50 = 50% profit, 0 = disabled) |
+| `PROFIT_CHECK_INTERVAL_SECS` | `10` | How often to check profit targets (seconds) |
 
 ## Bundle Strategy
 

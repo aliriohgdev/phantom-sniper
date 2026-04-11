@@ -71,4 +71,20 @@ sol! {
             uint256 virtualOffers
         );
     }
+
+    /// HelperManager — used for accurate sell simulation (trySell)
+    #[sol(rpc)]
+    interface IHelperManager {
+        /// Simulate selling `amount` tokens. Returns exact BNB output after fees.
+        /// This does NOT execute a sale — it's a view function for profit calculation.
+        function trySell(
+            address token,
+            uint256 amount
+        ) external view returns (
+            address tokenManager,
+            address quote,
+            uint256 funds,
+            uint256 fee
+        );
+    }
 }

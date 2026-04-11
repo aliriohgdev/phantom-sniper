@@ -1,8 +1,8 @@
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
-    network::{EthereumWallet, TransactionBuilder, TxSigner},
+    network::{EthereumWallet, TxSigner},
     primitives::{Address, TxKind, U256},
-    providers::{Provider, ProviderBuilder, WalletProvider},
+    providers::{Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
 };
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::config::*;
-use crate::contracts::{ITokenManager, IERC20};
+use crate::contracts::{IHelperManager, ITokenManager, IERC20};
 
 #[derive(Debug, Clone)]
 pub struct TokenInfoData {
@@ -236,6 +236,15 @@ impl Trader {
             funds: result.funds,
             status: result.status,
         })
+    }
+
+    /// Simulate selling `amount` tokens via HelperManager.trySell.
+    /// Returns the exact BNB output (`funds`) after fees — does NOT execute a tx.
+    /// Used for accurate profit calculation before deciding to sell.
+    pub async fn try_sell(&self, token: Address, amount: U256) -> Result<U256> {
+        let contract = IHelperManager::new(*HELPER_MANAGER_ADDRESS, self.provider.clone());
+        let result = contract.trySell(token, amount).call().await?;
+        Ok(result.funds)
     }
 
     async fn sign_legacy_tx(&self, tx: TxLegacy) -> Result<Vec<u8>> {

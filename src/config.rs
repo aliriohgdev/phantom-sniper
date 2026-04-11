@@ -83,6 +83,12 @@ pub static MEME_CONTRACT_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
         })
 });
 
+/// HelperManager contract — used for accurate sell simulation (trySell).
+/// Returns exact BNB output before executing a real sell.
+pub static HELPER_MANAGER_ADDRESS: LazyLock<Address> = LazyLock::new(|| {
+    Address::from_str("0xF251F83e40a78868FcfA3FA4599Dad6494E46034").unwrap()
+});
+
 /// Max block delta for bundle validity (bundle valid for next N blocks).
 pub static MAX_BLOCK_DELTA: LazyLock<u64> = LazyLock::new(|| {
     env::var("MAX_BLOCK_DELTA")
@@ -191,6 +197,24 @@ pub static POSITION_TTL_SECS: LazyLock<u64> = LazyLock::new(|| {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1800)
+});
+
+/// Take-profit target as percentage of cost basis.
+/// 50 = sell when position value reaches 150% of our BNB cost (50% profit).
+/// 0 = disabled (use TTL only).
+pub static TAKE_PROFIT_PCT: LazyLock<f64> = LazyLock::new(|| {
+    env::var("TAKE_PROFIT_PCT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0)
+});
+
+/// How often to check profit targets (seconds).
+pub static PROFIT_CHECK_INTERVAL_SECS: LazyLock<u64> = LazyLock::new(|| {
+    env::var("PROFIT_CHECK_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10)
 });
 
 // ============== Function selectors for four.meme ==============

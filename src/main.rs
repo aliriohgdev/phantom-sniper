@@ -26,7 +26,8 @@ use trader::Trader;
 struct TokenInfo {
     token: Address,
     developer: Address,
-    our_position: U256,
+    our_position: U256,        // current token balance
+    cost_basis_bnb: U256,      // BNB we spent to buy
     dev_initial_balance: U256, // dev token balance right after creation
     dev_cumulative_sold: U256, // total tokens dev has sold so far
     created_at: std::time::Instant, // when we entered this position
@@ -431,6 +432,7 @@ impl Sniper {
                 token: predicted_addr,
                 developer: from_addr,
                 our_position: buy_amount,        // Track our buy amount
+                cost_basis_bnb: buy_amount,       // BNB we spent
                 dev_initial_balance: U256::ZERO, // will be set on first sell check
                 dev_cumulative_sold: U256::ZERO,
                 created_at: std::time::Instant::now(),
@@ -686,8 +688,15 @@ impl Sniper {
                 } else {
                     // Update our tracked position and cumulative sold
                     if let Some(mut entry) = self.token_memory.get_mut(&token) {
-                        entry.our_position =
-                            entry.our_position.saturating_sub(sell_amount_adjusted);
+                        let sold = sell_amount_adjusted.min(entry.our_position);
+                        if !entry.our_position.is_zero() {
+                            // Adjust cost basis proportionally to tokens sold
+                            let remaining = entry.our_position.saturating_sub(sold);
+                            entry.cost_basis_bnb = entry.cost_basis_bnb
+                                * remaining
+                                / entry.our_position;
+                            entry.our_position = remaining;
+                        }
                         entry.dev_cumulative_sold = cumulative_sold;
                     }
                 }
@@ -954,6 +963,52 @@ async fn main() -> Result<()> {
             }
         }
     });
+
+    // Spawn take-profit monitor — sells when position hits target profit.
+    // Uses HelperManager.trySell for exact BNB output (after fees), no approximations.
+    if *TAKE_PROFIT_PCT > 0.0 {
+        let sniper_profit = Arc::clone(&sniper);
+        tokio::spawn(async move {
+            let target_pct = *TAKE_PROFIT_PCT;
+            loop {
+                sleep(Duration::from_secs(*PROFIT_CHECK_INTERVAL_SECS)).await;
+
+                let positions: Vec<(Address, U256, U256)> = sniper_profit
+                    .token_memory
+                    .iter()
+                    .filter(|entry| !entry.our_position.is_zero() && !entry.cost_basis_bnb.is_zero())
+                    .map(|entry| (entry.token, entry.our_position, entry.cost_basis_bnb))
+                    .collect();
+
+                for (token, our_balance, cost_basis) in positions {
+                    // trySell returns exact BNB output after fees — no approximation
+                    match sniper_profit.trader.try_sell(token, our_balance).await {
+                        Ok(bnb_out) if bnb_out > cost_basis => {
+                            let diff = bnb_out - cost_basis;
+                            let profit_pct =
+                                (diff * U256::from(10000) / cost_basis).to::<u64>() as f64 / 100.0;
+
+                            if profit_pct >= target_pct {
+                                warn!(
+                                    "🎯 TAKE-PROFIT HIT! {:?} profit: {:.1}% >= {:.1}% | cost: {} BNB, output: {} BNB → dumping",
+                                    token, profit_pct, target_pct,
+                                    alloy::primitives::utils::format_ether(cost_basis),
+                                    alloy::primitives::utils::format_ether(bnb_out)
+                                );
+                                if let Err(e) = sniper_profit.emergency_sell(token, our_balance).await {
+                                    error!("Take-profit sell failed for {:?}: {}", token, e);
+                                }
+                            }
+                        }
+                        Ok(_) => {} // Not profitable yet, skip
+                        Err(e) => {
+                            warn!("Profit check trySell error for {:?}: {}", token, e);
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     // Spawn dev balance monitor — polls dev token balance to catch sells we miss from mempool
     let sniper_monitor = Arc::clone(&sniper);
