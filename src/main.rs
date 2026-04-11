@@ -261,6 +261,7 @@ impl Sniper {
         input_data: &str,
         value: U256,
         raw_tx: Vec<u8>,
+        tx_nonce: u64,
     ) -> Result<()> {
         use chrono::Utc;
 
@@ -310,30 +311,41 @@ impl Sniper {
         let dev_buy_cost: Option<U256> = decoded_params.as_ref().map(|d| d.params.fee2);
 
         // ---- FILTER 0: Dev blacklist ----
-        if DEV_BLACKLIST.contains(&from_addr) {
-            info!("⏭️  Skipping token: developer {:?} is blacklisted", from_addr);
+        // Commented out — replaced by nonce filter
+        // if DEV_BLACKLIST.contains(&from_addr) {
+        //     info!("⏭️  Skipping token: developer {:?} is blacklisted", from_addr);
+        //     return Ok(());
+        // }
+
+        // ---- FILTER 1: Min dev buy ----
+        // Commented out — replaced by nonce filter
+        // let min_dev_buy_wei = alloy::primitives::utils::parse_ether(&MIN_DEV_BUY_BNB.to_string())?;
+        // match dev_buy_cost {
+        //     Some(cost) if cost < min_dev_buy_wei => {
+        //         let cost_bnb = alloy::primitives::utils::format_ether(cost);
+        //         info!(
+        //             "⏭️  Skipping token: dev buy {} BNB < min {} BNB",
+        //             cost_bnb, *MIN_DEV_BUY_BNB
+        //         );
+        //         return Ok(());
+        //     }
+        //     None => {
+        //         info!("⏭️  Skipping token: no dev buy detected");
+        //         return Ok(());
+        //     }
+        //     _ => {} // dev buy >= min, continue
+        // }
+
+        // ---- FILTER 2: Nonce — only buy if dev's tx nonce is low (fresh wallet / early token) ----
+        if tx_nonce >= 4 {
+            info!(
+                "⏭️  Skipping token: dev tx nonce {} >= 4 (likely not an early creator)",
+                tx_nonce
+            );
             return Ok(());
         }
 
-        // ---- FILTER 1: Min dev buy ----
-        let min_dev_buy_wei = alloy::primitives::utils::parse_ether(&MIN_DEV_BUY_BNB.to_string())?;
-        match dev_buy_cost {
-            Some(cost) if cost < min_dev_buy_wei => {
-                let cost_bnb = alloy::primitives::utils::format_ether(cost);
-                info!(
-                    "⏭️  Skipping token: dev buy {} BNB < min {} BNB",
-                    cost_bnb, *MIN_DEV_BUY_BNB
-                );
-                return Ok(());
-            }
-            None => {
-                info!("⏭️  Skipping token: no dev buy detected");
-                return Ok(());
-            }
-            _ => {} // dev buy >= min, continue
-        }
-
-        // ---- FILTER 2: Dev rate limit ----
+        // ---- FILTER 3: Dev rate limit ----
         if self.is_dev_rate_limited(from_addr) {
             return Ok(());
         }
@@ -1257,6 +1269,7 @@ async fn run_subscription_ws(sniper: Arc<Sniper>) -> Result<()> {
         let input_data_clone = input_data.clone();
         let input_hex_clone = input_hex.clone();
         let raw_tx_clone = raw_tx_buf;
+        let tx_nonce = tx.nonce();
 
         tokio::spawn(async move {
             let result = match tx_type {
@@ -1268,6 +1281,7 @@ async fn run_subscription_ws(sniper: Arc<Sniper>) -> Result<()> {
                             &input_hex_clone,
                             value,
                             raw_tx_clone,
+                            tx_nonce,
                         )
                         .await
                 }
@@ -1446,6 +1460,7 @@ async fn run_subscription_ipc(sniper: Arc<Sniper>) -> Result<()> {
         let input_data_clone = input_data.clone();
         let input_hex_clone = input_hex.clone();
         let raw_tx_clone = raw_tx_buf;
+        let tx_nonce = tx.nonce();
 
         tokio::spawn(async move {
             let result = match tx_type {
@@ -1457,6 +1472,7 @@ async fn run_subscription_ipc(sniper: Arc<Sniper>) -> Result<()> {
                             &input_hex_clone,
                             value,
                             raw_tx_clone,
+                            tx_nonce,
                         )
                         .await
                 }
