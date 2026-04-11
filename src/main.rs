@@ -28,6 +28,7 @@ struct TokenInfo {
     developer: Address,
     our_position: U256,        // current token balance
     cost_basis_bnb: U256,      // BNB we spent to buy
+    peak_value_bnb: U256,      // highest BNB value seen (trailing stop-loss anchor)
     dev_initial_balance: U256, // dev token balance right after creation
     dev_cumulative_sold: U256, // total tokens dev has sold so far
     created_at: std::time::Instant, // when we entered this position
@@ -445,6 +446,7 @@ impl Sniper {
                 developer: from_addr,
                 our_position: buy_amount,        // Track our buy amount
                 cost_basis_bnb: buy_amount,       // BNB we spent
+                peak_value_bnb: buy_amount,       // Initial peak = our cost
                 dev_initial_balance: U256::ZERO, // will be set on first sell check
                 dev_cumulative_sold: U256::ZERO,
                 created_at: std::time::Instant::now(),
@@ -976,45 +978,106 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Spawn take-profit monitor — sells when position hits target profit.
+    // Spawn take-profit + trailing stop-loss monitor.
     // Uses HelperManager.trySell for exact BNB output (after fees), no approximations.
-    if *TAKE_PROFIT_PCT > 0.0 {
-        let sniper_profit = Arc::clone(&sniper);
+    // - Take-profit: sell when current value >= cost * (1 + TAKE_PROFIT_PCT/100)
+    // - Trailing stop-loss: sell when current value < peak * (1 - STOP_LOSS_PCT/100)
+    //   Peak is updated every check if current value > previous peak.
+    let has_tp = *TAKE_PROFIT_PCT > 0.0;
+    let has_sl = *STOP_LOSS_PCT > 0.0;
+    if has_tp || has_sl {
+        let sniper_monitor = Arc::clone(&sniper);
+        let tp_target = *TAKE_PROFIT_PCT;
+        let sl_target = *STOP_LOSS_PCT;
         tokio::spawn(async move {
-            let target_pct = *TAKE_PROFIT_PCT;
             loop {
                 sleep(Duration::from_secs(*PROFIT_CHECK_INTERVAL_SECS)).await;
 
-                let positions: Vec<(Address, U256, U256)> = sniper_profit
+                // Collect positions that have a balance and cost basis
+                let positions: Vec<Address> = sniper_monitor
                     .token_memory
                     .iter()
                     .filter(|entry| !entry.our_position.is_zero() && !entry.cost_basis_bnb.is_zero())
-                    .map(|entry| (entry.token, entry.our_position, entry.cost_basis_bnb))
+                    .map(|entry| entry.token)
                     .collect();
 
-                for (token, our_balance, cost_basis) in positions {
-                    // trySell returns exact BNB output after fees — no approximation
-                    match sniper_profit.trader.try_sell(token, our_balance).await {
-                        Ok(bnb_out) if bnb_out > cost_basis => {
-                            let diff = bnb_out - cost_basis;
-                            let profit_pct =
-                                (diff * U256::from(10000) / cost_basis).to::<u64>() as f64 / 100.0;
+                for token in positions {
+                    // We need to re-read the entry inside the loop to get mutable access
+                    let info = match sniper_monitor.token_memory.get(&token) {
+                        Some(info) => info.clone(),
+                        None => continue,
+                    };
 
-                            if profit_pct >= target_pct {
-                                warn!(
-                                    "🎯 TAKE-PROFIT HIT! {:?} profit: {:.1}% >= {:.1}% | cost: {} BNB, output: {} BNB → dumping",
-                                    token, profit_pct, target_pct,
-                                    alloy::primitives::utils::format_ether(cost_basis),
-                                    alloy::primitives::utils::format_ether(bnb_out)
-                                );
-                                if let Err(e) = sniper_profit.emergency_sell(token, our_balance).await {
-                                    error!("Take-profit sell failed for {:?}: {}", token, e);
+                    // trySell returns exact BNB output after fees — no approximation
+                    match sniper_monitor.trader.try_sell(token, info.our_position).await {
+                        Ok(bnb_out) => {
+                            // ---- Update trailing stop-loss peak ----
+                            if has_sl {
+                                let peak = info.peak_value_bnb;
+                                let mut new_peak = peak;
+                                if bnb_out > peak {
+                                    // Price went up, update peak
+                                    new_peak = bnb_out;
+                                    if let Some(mut entry) = sniper_monitor.token_memory.get_mut(&token) {
+                                        entry.peak_value_bnb = new_peak;
+                                    }
+                                    info!(
+                                        "📈 Trailing SL peak updated for {:?}: {} BNB → {} BNB",
+                                        token,
+                                        alloy::primitives::utils::format_ether(peak),
+                                        alloy::primitives::utils::format_ether(new_peak)
+                                    );
+                                }
+
+                                // Check if we hit stop-loss: bnb_out < peak * (1 - SL/100)
+                                let sl_threshold = new_peak
+                                    * U256::from((10000u64 - (sl_target * 100.0) as u64))
+                                    / U256::from(10000);
+                                if bnb_out < sl_threshold {
+                                    let drop_pct = if new_peak.is_zero() {
+                                        0.0
+                                    } else {
+                                        let drop = new_peak - bnb_out;
+                                        (drop * U256::from(10000) / new_peak).to::<u64>() as f64 / 100.0
+                                    };
+                                    warn!(
+                                        "🛑 TRAILING STOP-LOSS HIT! {:?} peak: {} BNB, current: {} BNB (drop {:.1}% >= {:.1}%) → dumping",
+                                        token,
+                                        alloy::primitives::utils::format_ether(new_peak),
+                                        alloy::primitives::utils::format_ether(bnb_out),
+                                        drop_pct, sl_target
+                                    );
+                                    if let Err(e) = sniper_monitor.emergency_sell(token, info.our_position).await {
+                                        error!("Stop-loss sell failed for {:?}: {}", token, e);
+                                    }
+                                    continue; // Position was sold, skip take-profit check
+                                }
+                            }
+
+                            // ---- Check take-profit ----
+                            if has_tp {
+                                let cost = info.cost_basis_bnb;
+                                if bnb_out > cost {
+                                    let diff = bnb_out - cost;
+                                    let profit_pct =
+                                        (diff * U256::from(10000) / cost).to::<u64>() as f64 / 100.0;
+
+                                    if profit_pct >= tp_target {
+                                        warn!(
+                                            "🎯 TAKE-PROFIT HIT! {:?} profit: {:.1}% >= {:.1}% | cost: {} BNB, output: {} BNB → dumping",
+                                            token, profit_pct, tp_target,
+                                            alloy::primitives::utils::format_ether(cost),
+                                            alloy::primitives::utils::format_ether(bnb_out)
+                                        );
+                                        if let Err(e) = sniper_monitor.emergency_sell(token, info.our_position).await {
+                                            error!("Take-profit sell failed for {:?}: {}", token, e);
+                                        }
+                                    }
                                 }
                             }
                         }
-                        Ok(_) => {} // Not profitable yet, skip
                         Err(e) => {
-                            warn!("Profit check trySell error for {:?}: {}", token, e);
+                            warn!("Monitor trySell error for {:?}: {}", token, e);
                         }
                     }
                 }

@@ -211,12 +211,23 @@ pub static TAKE_PROFIT_PCT: LazyLock<f64> = LazyLock::new(|| {
         .unwrap_or(0.0)
 });
 
-/// How often to check profit targets (seconds).
+/// Trailing stop-loss percentage.
+/// 30 = sell if current value drops 30% from the peak (highest value seen).
+/// The stop-loss trails upward as the position gains value.
+/// 0 = disabled.
+pub static STOP_LOSS_PCT: LazyLock<f64> = LazyLock::new(|| {
+    env::var("STOP_LOSS_PCT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0)
+});
+
+/// How often to check profit targets and stop-loss (seconds).
 pub static PROFIT_CHECK_INTERVAL_SECS: LazyLock<u64> = LazyLock::new(|| {
     env::var("PROFIT_CHECK_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(10)
+        .unwrap_or(1)
 });
 
 // ============== Function selectors for four.meme ==============
