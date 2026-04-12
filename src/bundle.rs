@@ -346,7 +346,9 @@ impl BundleSender {
         current_block: u64,
         reverting_tx_hashes: Vec<String>,
     ) -> Result<BundleResponse> {
-        let params = self.make_params(&signed_txs, current_block, reverting_tx_hashes, true);
+        // Relays require maxBlockNumber > current_block, so we add MAX_BLOCK_DELTA
+        let max_block = current_block + *MAX_BLOCK_DELTA;
+        let params = self.make_params(&signed_txs, max_block, reverting_tx_hashes, true);
         let request = BundleRequest {
             jsonrpc: "2.0",
             id: 1,
