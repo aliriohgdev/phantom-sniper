@@ -179,7 +179,8 @@ impl BundleSender {
         buy_tx: Vec<u8>,
         current_block: u64,
     ) {
-        let next_block = current_block + 1;
+        let next_block = current_block + 1 + *MAX_BLOCK_DELTA;
+        let block_n = current_block + *MAX_BLOCK_DELTA;
 
         // Clone everything we need for the spawned tasks (no borrows across tokio::spawn)
         let client = self.client.clone();
@@ -210,11 +211,11 @@ impl BundleSender {
 
             let h = tokio::spawn(async move {
                 let a = Self::send_single_bundle(
-                    &client, &signer, relay, ba, current_block, vec![],
+                    &client, &signer, relay, ba, block_n, vec![],
                     "A[create+buy]", &fc_url, &br_url, &nr_url, auth.as_deref(),
                 ).await;
                 let b = Self::send_single_bundle(
-                    &client, &signer, relay, bb, current_block, vec![],
+                    &client, &signer, relay, bb, block_n, vec![],
                     "B[buy]", &fc_url, &br_url, &nr_url, auth.as_deref(),
                 ).await;
                 let c = Self::send_single_bundle(
