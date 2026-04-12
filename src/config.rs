@@ -135,20 +135,19 @@ pub static FRONTRUN_GAS_PREMIUM: LazyLock<u128> = LazyLock::new(|| {
 
 /// Comma-separated list of developer addresses to blacklist.
 /// Tokens created by these addresses are always skipped.
-/// Commented out — replaced by nonce filter (tx_nonce < 4)
-// pub static DEV_BLACKLIST: LazyLock<Vec<Address>> = LazyLock::new(|| {
-//     env::var("DEV_BLACKLIST")
-//         .ok()
-//         .map(|s| {
-//             s.split(',')
-//                 .filter_map(|addr| addr.trim().parse().ok())
-//                 .collect()
-//         })
-//         .unwrap_or_default()
-// });
+/// Currently disabled — only nonce and min_dev_buy filters are active.
+pub static _DEV_BLACKLIST: LazyLock<Vec<Address>> = LazyLock::new(|| {
+    env::var("DEV_BLACKLIST")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .filter_map(|addr| addr.trim().parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+});
 
 /// Minimum dev initial buy (BNB). Tokens with dev buy below this are skipped as spam.
-/// Commented out — replaced by nonce filter (tx_nonce < 4)
 pub static MIN_DEV_BUY_BNB: LazyLock<f64> = LazyLock::new(|| {
     env::var("MIN_DEV_BUY_BNB")
         .ok()

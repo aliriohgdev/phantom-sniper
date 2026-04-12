@@ -311,33 +311,7 @@ impl Sniper {
         let token_symbol: Option<String> = decoded_params.as_ref().map(|d| d.params.symbol.clone());
         let dev_buy_cost: Option<U256> = decoded_params.as_ref().map(|d| d.params.fee2);
 
-        // ---- FILTER 0: Dev blacklist ----
-        // Commented out — replaced by nonce filter
-        // if DEV_BLACKLIST.contains(&from_addr) {
-        //     info!("⏭️  Skipping token: developer {:?} is blacklisted", from_addr);
-        //     return Ok(());
-        // }
-
-        // ---- FILTER 1: Min dev buy ----
-        // Commented out — replaced by nonce filter
-        // let min_dev_buy_wei = alloy::primitives::utils::parse_ether(&MIN_DEV_BUY_BNB.to_string())?;
-        // match dev_buy_cost {
-        //     Some(cost) if cost < min_dev_buy_wei => {
-        //         let cost_bnb = alloy::primitives::utils::format_ether(cost);
-        //         info!(
-        //             "⏭️  Skipping token: dev buy {} BNB < min {} BNB",
-        //             cost_bnb, *MIN_DEV_BUY_BNB
-        //         );
-        //         return Ok(());
-        //     }
-        //     None => {
-        //         info!("⏭️  Skipping token: no dev buy detected");
-        //         return Ok(());
-        //     }
-        //     _ => {} // dev buy >= min, continue
-        // }
-
-        // ---- FILTER 2: Nonce — only buy if dev's tx nonce is low (fresh wallet / early token) ----
+        // ---- FILTER 0: Nonce — only buy if dev's tx nonce is low (fresh wallet / early token) ----
         if tx_nonce >= 4 {
             info!(
                 "⏭️  Skipping token: dev tx nonce {} >= 4 (likely not an early creator)",
@@ -346,7 +320,25 @@ impl Sniper {
             return Ok(());
         }
 
-        // ---- FILTER 3: Dev rate limit ----
+        // ---- FILTER 1: Min dev buy — skip tokens with insufficient dev commitment ----
+        let min_dev_buy_wei = alloy::primitives::utils::parse_ether(&MIN_DEV_BUY_BNB.to_string())?;
+        match dev_buy_cost {
+            Some(cost) if cost < min_dev_buy_wei => {
+                let cost_bnb = alloy::primitives::utils::format_ether(cost);
+                info!(
+                    "⏭️  Skipping token: dev buy {} BNB < min {} BNB",
+                    cost_bnb, *MIN_DEV_BUY_BNB
+                );
+                return Ok(());
+            }
+            None => {
+                info!("⏭️  Skipping token: no dev buy detected");
+                return Ok(());
+            }
+            _ => {} // dev buy >= min, continue
+        }
+
+        // ---- FILTER 2: Dev rate limit ----
         if self.is_dev_rate_limited(from_addr) {
             return Ok(());
         }
