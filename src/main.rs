@@ -424,67 +424,96 @@ impl Sniper {
             .dispatch_triple_bundle(raw_tx, buy_tx, current_block)
             .await;
 
-        // Store token in memory for dev exit tracking
-        // our_position and peak_value_bnb are set to ZERO — they will be populated
-        // AFTER the position is verified (9s later). This prevents the stop-loss
-        // monitor from firing before the buy actually lands.
+        // ---- Populate position with REAL balance immediately ----
+        // After dispatching bundles, check on-chain balance.
+        // If > 0: set position with real tokens right away.
+        // If 0: wait 1s and retry (block might still be mining).
         let buy_amount_for_verify = buy_amount;
-        self.token_memory.insert(
-            predicted_addr,
-            TokenInfo {
-                token: predicted_addr,
-                developer: from_addr,
-                our_position: U256::ZERO,        // Will be set after verification
-                cost_basis_bnb: buy_amount,       // BNB we spent (known)
-                peak_value_bnb: U256::ZERO,       // Will be set after verification
-                dev_initial_balance: U256::ZERO, // will be set on first sell check
-                dev_cumulative_sold: U256::ZERO,
-                created_at: std::time::Instant::now(),
-            },
-        );
+        let verify_token = predicted_addr;
 
-        // Spawn position verification — check actual balance after a few blocks
-        let sniper_verify = self.trader.clone();
-        let token_mem = self.token_memory.clone();
-        tokio::spawn(async move {
-            // Wait for bundle to land (configurable, default ~9s = 3 BSC blocks)
-            sleep(Duration::from_secs(*POSITION_VERIFY_DELAY_SECS)).await;
-            match sniper_verify.get_token_balance(predicted_addr).await {
-                Ok(balance) if balance.is_zero() => {
-                    warn!(
-                        "⚠️ Position verification: 0 balance for {:?} — backrun likely failed, removing",
-                        predicted_addr
-                    );
-                    token_mem.remove(&predicted_addr);
-                }
-                Ok(balance) => {
-                    info!(
-                        "✅ Position verified: {} tokens of {:?}",
-                        balance, predicted_addr
-                    );
-                    // Also fetch dev's initial token balance for sell detection
-                    let dev_balance = sniper_verify
-                        .get_token_balance_for(predicted_addr, from_addr)
-                        .await
-                        .unwrap_or(U256::ZERO);
-                    if let Some(mut entry) = token_mem.get_mut(&predicted_addr) {
-                        entry.our_position = balance;
-                        entry.peak_value_bnb = buy_amount_for_verify; // Peak = our cost basis
-                        entry.dev_initial_balance = dev_balance;
+        // First immediate check
+        let balance = self.trader.get_token_balance(predicted_addr).await.unwrap_or(U256::ZERO);
+
+        if !balance.is_zero() {
+            // Buy landed — set real position immediately
+            info!("✅ Buy landed immediately: {} tokens of {:?}", balance, predicted_addr);
+
+            // Also fetch dev's initial token balance
+            let dev_balance = self.trader
+                .get_token_balance_for(predicted_addr, from_addr)
+                .await
+                .unwrap_or(U256::ZERO);
+
+            self.token_memory.insert(
+                verify_token,
+                TokenInfo {
+                    token: verify_token,
+                    developer: from_addr,
+                    our_position: balance,
+                    cost_basis_bnb: buy_amount_for_verify,
+                    peak_value_bnb: buy_amount_for_verify,
+                    dev_initial_balance: dev_balance,
+                    dev_cumulative_sold: U256::ZERO,
+                    created_at: std::time::Instant::now(),
+                },
+            );
+            info!("📊 Dev {:?} holds {} tokens of {:?}", from_addr, dev_balance, verify_token);
+        } else {
+            // Not landed yet — insert placeholder, wait 1s and retry
+            self.token_memory.insert(
+                verify_token,
+                TokenInfo {
+                    token: verify_token,
+                    developer: from_addr,
+                    our_position: U256::ZERO,
+                    cost_basis_bnb: buy_amount_for_verify,
+                    peak_value_bnb: U256::ZERO,
+                    dev_initial_balance: U256::ZERO,
+                    dev_cumulative_sold: U256::ZERO,
+                    created_at: std::time::Instant::now(),
+                },
+            );
+
+            let sniper_verify = self.trader.clone();
+            let token_mem = self.token_memory.clone();
+            tokio::spawn(async move {
+                sleep(Duration::from_secs(*POSITION_VERIFY_DELAY_SECS)).await;
+                match sniper_verify.get_token_balance(verify_token).await {
+                    Ok(balance) if balance.is_zero() => {
+                        warn!(
+                            "⚠️ Position verification: 0 balance for {:?} — backrun likely failed, removing",
+                            verify_token
+                        );
+                        token_mem.remove(&verify_token);
                     }
-                    info!(
-                        "📊 Dev {:?} holds {} tokens of {:?}",
-                        from_addr, dev_balance, predicted_addr
-                    );
+                    Ok(balance) => {
+                        info!(
+                            "✅ Position verified after delay: {} tokens of {:?}",
+                            balance, verify_token
+                        );
+                        let dev_balance = sniper_verify
+                            .get_token_balance_for(verify_token, from_addr)
+                            .await
+                            .unwrap_or(U256::ZERO);
+                        if let Some(mut entry) = token_mem.get_mut(&verify_token) {
+                            entry.our_position = balance;
+                            entry.peak_value_bnb = buy_amount_for_verify;
+                            entry.dev_initial_balance = dev_balance;
+                        }
+                        info!(
+                            "📊 Dev {:?} holds {} tokens of {:?}",
+                            from_addr, dev_balance, verify_token
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Position verification RPC error for {:?}: {}",
+                            verify_token, e
+                        );
+                    }
                 }
-                Err(e) => {
-                    warn!(
-                        "Position verification RPC error for {:?}: {}",
-                        predicted_addr, e
-                    );
-                }
-            }
-        });
+            });
+        }
 
         Ok(())
     }

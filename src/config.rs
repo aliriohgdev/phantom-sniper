@@ -202,12 +202,13 @@ pub static DEV_SELL_CUMULATIVE_DUMP_PCT: LazyLock<f64> = LazyLock::new(|| {
 
 // ============== Position management ==============
 
-/// Seconds to wait after backrun before verifying position balance (default: 9s ≈ 3 BSC blocks).
+/// Seconds to wait after backrun before verifying position balance if buy didn't land immediately.
+/// Default: 1s (BSC blocks every ~0.3s, 1s ≈ 3 blocks).
 pub static POSITION_VERIFY_DELAY_SECS: LazyLock<u64> = LazyLock::new(|| {
     env::var("POSITION_VERIFY_DELAY_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(9)
+        .unwrap_or(1)
 });
 
 /// Max seconds to hold a position before auto-selling (default: 1800 = 30 min).
