@@ -425,16 +425,18 @@ impl Sniper {
             .await;
 
         // Store token in memory for dev exit tracking
-        // We'll fetch the dev's initial balance after the bundle lands
-        // For now, store zero — it will be populated on first dev sell
+        // our_position and peak_value_bnb are set to ZERO — they will be populated
+        // AFTER the position is verified (9s later). This prevents the stop-loss
+        // monitor from firing before the buy actually lands.
+        let buy_amount_for_verify = buy_amount;
         self.token_memory.insert(
             predicted_addr,
             TokenInfo {
                 token: predicted_addr,
                 developer: from_addr,
-                our_position: buy_amount,        // Track our buy amount
-                cost_basis_bnb: buy_amount,       // BNB we spent
-                peak_value_bnb: buy_amount,       // Initial peak = our cost
+                our_position: U256::ZERO,        // Will be set after verification
+                cost_basis_bnb: buy_amount,       // BNB we spent (known)
+                peak_value_bnb: U256::ZERO,       // Will be set after verification
                 dev_initial_balance: U256::ZERO, // will be set on first sell check
                 dev_cumulative_sold: U256::ZERO,
                 created_at: std::time::Instant::now(),
@@ -467,6 +469,7 @@ impl Sniper {
                         .unwrap_or(U256::ZERO);
                     if let Some(mut entry) = token_mem.get_mut(&predicted_addr) {
                         entry.our_position = balance;
+                        entry.peak_value_bnb = buy_amount_for_verify; // Peak = our cost basis
                         entry.dev_initial_balance = dev_balance;
                     }
                     info!(
