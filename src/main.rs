@@ -1018,6 +1018,25 @@ async fn main() -> Result<()> {
                     // trySell returns exact BNB output after fees — no approximation
                     match sniper_monitor.trader.try_sell(token, info.our_position).await {
                         Ok(bnb_out) => {
+                            let cost_bnb = info.cost_basis_bnb;
+                            let profit_pct = if cost_bnb.is_zero() {
+                                0.0
+                            } else if bnb_out > cost_bnb {
+                                let diff = bnb_out - cost_bnb;
+                                (diff * U256::from(10000) / cost_bnb).to::<u64>() as f64 / 100.0
+                            } else {
+                                let diff = cost_bnb - bnb_out;
+                                -((diff * U256::from(10000) / cost_bnb).to::<u64>() as f64 / 100.0)
+                            };
+
+                            info!(
+                                "💼 Position check {:?} | balance: {} tokens | value: {} BNB | cost: {} BNB | PnL: {:.2}%",
+                                token,
+                                info.our_position,
+                                alloy::primitives::utils::format_ether(bnb_out),
+                                alloy::primitives::utils::format_ether(cost_bnb),
+                                profit_pct
+                            );
                             // ---- Update trailing stop-loss peak ----
                             if has_sl {
                                 let peak = info.peak_value_bnb;
