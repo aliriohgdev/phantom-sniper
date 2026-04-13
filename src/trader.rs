@@ -1,7 +1,7 @@
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
     network::{EthereumWallet, TxSigner},
-    primitives::{Address, TxKind, U256},
+    primitives::{keccak256, Address, B256, TxKind, U256},
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
+use tracing::{info, warn};
 
 use crate::config::*;
 use crate::contracts::{IHelperManager, ITokenManager, IERC20};
@@ -244,6 +245,19 @@ impl Trader {
         let contract = IHelperManager::new(*HELPER_MANAGER_ADDRESS, self.provider.clone());
         let result = contract.trySell(token, amount).call().await?;
         Ok(result.funds)
+    }
+
+    /// Send a raw signed tx to the mempool (not via MEV bundle).
+    /// Used for post-buy approve with cheap gas.
+    pub async fn send_raw_tx(&self, raw_tx: Vec<u8>) -> Result<B256> {
+        // Send via eth_sendRawTransaction
+        let tx_hex = format!("0x{}", hex::encode(&raw_tx));
+        let hash = self.provider.raw_request::<_, B256>(
+            std::borrow::Cow::Borrowed("eth_sendRawTransaction"),
+            vec![tx_hex],
+        ).await?;
+        info!("✅ Raw tx sent: {:?}", hash);
+        Ok(hash)
     }
 
     async fn sign_legacy_tx(&self, tx: TxLegacy) -> Result<Vec<u8>> {

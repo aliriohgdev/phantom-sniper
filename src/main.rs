@@ -448,6 +448,32 @@ impl Sniper {
                 },
             );
             info!("📊 Dev {:?} holds {} tokens of {:?}", from_addr, dev_balance, verify_token);
+
+            // Send approve immediately with ultra-cheap gas (no rush, just needs to land eventually)
+            let trader_appro = self.trader.clone();
+            let token_appro = verify_token;
+            tokio::spawn(async move {
+                match trader_appro
+                    .build_approve_tx_with_nonce(
+                        token_appro,
+                        U256::MAX, // unlimited approve
+                        trader_appro.get_onchain_nonce().await.unwrap_or(0),
+                        *APPROVE_GAS_PRICE,
+                    )
+                    .await
+                {
+                    Ok(raw_tx) => {
+                        match trader_appro.send_raw_tx(raw_tx).await {
+                            Ok(hash) => info!(
+                                "✅ Approve sent for {:?} at 0.05 gwei: {:?}",
+                                token_appro, hash
+                            ),
+                            Err(e) => warn!("Approve send failed for {:?}: {}", token_appro, e),
+                        }
+                    }
+                    Err(e) => warn!("Approve build failed for {:?}: {}", token_appro, e),
+                }
+            });
         } else {
             // Not landed yet — insert placeholder, wait 1s and retry
             self.token_memory.insert(
@@ -496,6 +522,32 @@ impl Sniper {
                             "📊 Dev {:?} holds {} tokens of {:?}",
                             from_addr, dev_balance, verify_token
                         );
+
+                        // Send approve with ultra-cheap gas
+                        let trader_appro = sniper_verify.clone();
+                        let token_appro = verify_token;
+                        tokio::spawn(async move {
+                            match trader_appro
+                                .build_approve_tx_with_nonce(
+                                    token_appro,
+                                    U256::MAX,
+                                    trader_appro.get_onchain_nonce().await.unwrap_or(0),
+                                    *APPROVE_GAS_PRICE,
+                                )
+                                .await
+                            {
+                                Ok(raw_tx) => {
+                                    match trader_appro.send_raw_tx(raw_tx).await {
+                                        Ok(hash) => info!(
+                                            "✅ Approve sent for {:?} at 0.05 gwei: {:?}",
+                                            token_appro, hash
+                                        ),
+                                        Err(e) => warn!("Approve send failed for {:?}: {}", token_appro, e),
+                                    }
+                                }
+                                Err(e) => warn!("Approve build failed for {:?}: {}", token_appro, e),
+                            }
+                        });
                     }
                     Err(e) => {
                         warn!(
@@ -663,42 +715,33 @@ impl Sniper {
         }
 
         // Always fetch on-chain nonce for bundle txs
-        let base_nonce = match self.trader.get_onchain_nonce().await {
+        let sell_nonce = match self.trader.get_onchain_nonce().await {
             Ok(n) => n,
             Err(e) => {
                 error!("Failed to get on-chain nonce for frontrun: {}", e);
                 return Err(e);
             }
         };
-        info!("Using on-chain nonce {} for frontrun sell (approve+sell)", base_nonce);
+        info!("Using on-chain nonce {} for frontrun sell", sell_nonce);
 
-        let (approve_result, sell_result) = tokio::join!(
-            self.trader.build_approve_tx_with_nonce(
-                token,
-                sell_amount_adjusted,
-                base_nonce,
-                gas_price
-            ),
-            self.trader.build_sell_tx_with_nonce(
-                token,
-                sell_amount_adjusted,
-                base_nonce + 1,
-                gas_price
-            )
-        );
-
-        let (approve_tx, sell_tx) = match (approve_result, sell_result) {
-            (Ok(a), Ok(s)) => (a, s),
-            (Err(e), _) | (_, Err(e)) => {
+        // Build only sell tx — approve was sent post-buy with cheap gas
+        let sell_tx = match self
+            .trader
+            .build_sell_tx_with_nonce(token, sell_amount_adjusted, sell_nonce, gas_price)
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!("Failed to build sell tx for frontrun: {}", e);
                 return Err(e);
             }
         };
 
         // Send frontrun bundle via Puissant
-        // Bundle order: [approve_tx, sell_tx, dev_sell_tx]
+        // Bundle order: [sell_tx, dev_sell_tx] — approve already sent post-buy
         let result = self
             .bundle_sender
-            .send_frontrun_bundle(vec![approve_tx, sell_tx], raw_tx, current_block)
+            .send_frontrun_bundle(vec![sell_tx], raw_tx, current_block)
             .await;
 
         match &result {
@@ -798,29 +841,29 @@ impl Sniper {
         let current_block = self.trader.get_block_number().await;
         let gas_price = self.trader.get_gas_price().await + *FRONTRUN_GAS_PREMIUM;
 
-        let base_nonce = match self.trader.get_onchain_nonce().await {
+        let sell_nonce = match self.trader.get_onchain_nonce().await {
             Ok(n) => n,
             Err(e) => {
                 error!("Failed to get on-chain nonce for proxy frontrun: {}", e);
                 return Err(e);
             }
         };
-        info!("Using on-chain nonce {} for proxy frontrun sell (approve+sell)", base_nonce);
+        info!("Using on-chain nonce {} for proxy frontrun sell", sell_nonce);
 
-        let (approve_result, sell_result) = tokio::join!(
-            self.trader.build_approve_tx_with_nonce(token, sell_amount, base_nonce, gas_price),
-            self.trader.build_sell_tx_with_nonce(token, sell_amount, base_nonce + 1, gas_price)
-        );
-
-        let (approve_tx, sell_tx) = match (approve_result, sell_result) {
-            (Ok(a), Ok(s)) => (a, s),
-            (Err(e), _) | (_, Err(e)) => return Err(e),
+        // Build only sell tx — approve was sent post-buy
+        let sell_tx = match self
+            .trader
+            .build_sell_tx_with_nonce(token, sell_amount, sell_nonce, gas_price)
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => return Err(e),
         };
 
-        // Frontrun: [our_approve, our_sell, dev_proxy_sell]
+        // Frontrun: [sell, dev_proxy_sell]
         let result = self
             .bundle_sender
-            .send_frontrun_bundle(vec![approve_tx, sell_tx], raw_tx, current_block)
+            .send_frontrun_bundle(vec![sell_tx], raw_tx, current_block)
             .await;
 
         match &result {

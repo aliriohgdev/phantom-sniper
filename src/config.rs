@@ -131,6 +131,15 @@ pub static FRONTRUN_GAS_PREMIUM: LazyLock<u128> = LazyLock::new(|| {
         .unwrap_or(5_000_000_000) // 5 gwei
 });
 
+/// Gas price for post-buy approve tx (wei).
+/// Since we send approve immediately after buy (no rush), we can use minimum gas.
+pub static APPROVE_GAS_PRICE: LazyLock<u128> = LazyLock::new(|| {
+    env::var("APPROVE_GAS_PRICE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50_000_000) // 0.05 gwei — ultra barato
+});
+
 // ============== Filters ==============
 
 /// Comma-separated list of developer addresses to blacklist.
