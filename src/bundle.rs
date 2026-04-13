@@ -260,9 +260,9 @@ impl BundleSender {
         let bundle_b = vec![sell_tx.clone()];
         let bundle_c = vec![sell_tx];
 
-        let targets_a = vec![(current_block, "A-N")];
-        let targets_b = vec![(current_block, "B-N")];
-        let targets_c = vec![(current_block + 1, "C-N+1")];
+        let targets_a = vec![(current_block + *MAX_BLOCK_DELTA, "A-N")];
+        let targets_b = vec![(current_block + *MAX_BLOCK_DELTA, "B-N")];
+        let targets_c = vec![(current_block + 1 + *MAX_BLOCK_DELTA, "C-N+1")];
 
         let mut handles = Vec::with_capacity(3);
 
@@ -340,8 +340,8 @@ impl BundleSender {
 
         let bundle = vec![sell_tx];
         let targets = vec![
-            (current_block, "N"),
-            (current_block + 1, "N+1"),
+            (current_block + *MAX_BLOCK_DELTA, "N"),
+            (current_block + 1 + *MAX_BLOCK_DELTA, "N+1"),
         ];
 
         let mut handles = Vec::with_capacity(3);
