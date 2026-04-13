@@ -235,6 +235,63 @@ impl BundleSender {
         }
     }
 
+    /// Dispatch sell bundle to ALL relays x 3 blocks (N, N+1, N+2).
+    /// Used for emergency sells — maximizes chance of inclusion even if blocks are full.
+    ///
+    /// Bundle: [sell_tx]
+    /// Strategy: 3 relays × 3 blocks = 9 requests total.
+    /// Approve should already be sent post-buy — only sell needed.
+    pub async fn dispatch_triple_sell(
+        &self,
+        _approve_tx: Vec<u8>,
+        sell_tx: Vec<u8>,
+        current_block: u64,
+    ) {
+        let client = self.client.clone();
+        let signer = self.signer.clone();
+        let auth = self.blockrazor_auth.clone();
+        let nr_url = self.nodereal_url.clone();
+        let _48club_url = self._48club_url.clone();
+        let blockrazor_url = self.blockrazor_url.clone();
+
+        let bundle = vec![sell_tx];
+
+        let targets = vec![
+            (current_block, "N"),
+            (current_block + 1, "N+1"),
+            (current_block + 2, "N+2"),
+        ];
+
+        let mut handles = Vec::with_capacity(3);
+
+        for relay in [Relay::FortyEightClub, Relay::BlockRazor, Relay::NodeReal] {
+            let c = client.clone();
+            let s = signer.clone();
+            let a = auth.clone();
+            let nr = nr_url.clone();
+            let fc = _48club_url.clone();
+            let br = blockrazor_url.clone();
+            let b = bundle.clone();
+            let t = targets.clone();
+
+            let h = tokio::spawn(async move {
+                for (block, label) in t {
+                    Self::send_single_bundle(
+                        &c, &s, relay, b.clone(), block, vec![],
+                        &format!("Sell-{}", label), &fc, &br, &nr, a.as_deref(),
+                    ).await;
+                }
+            });
+            handles.push(h);
+        }
+
+        for handle in handles {
+            if let Err(e) = handle.await {
+                warn!("Relay dispatch task panicked: {}", e);
+            }
+        }
+    }
+
     /// Send a single bundle to one relay. Fire and forget.
     async fn send_single_bundle(
         client: &Client,

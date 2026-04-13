@@ -885,41 +885,46 @@ impl Sniper {
         Ok(())
     }
 
-    /// Emergency sell with higher gas for front-running
+    /// Emergency sell with higher gas — dispatch to ALL relays x 3 blocks
     async fn emergency_sell(&self, token: Address, amount: U256) -> Result<serde_json::Value> {
         info!("EMERGENCY SELL: {} of token {:?}", amount, token);
 
         let adjusted_amount = align_to_gwei(amount.saturating_sub(U256::from(*DUST_AMOUNT_WEI)));
         let gas_price = self.trader.get_gas_price().await + *FRONTRUN_GAS_PREMIUM;
 
-        // Always fetch on-chain nonce for bundle txs
-        let base_nonce = self.trader.get_onchain_nonce().await?;
-        info!("Using on-chain nonce {} for emergency sell (approve+sell)", base_nonce);
+        // Fetch on-chain nonce
+        let sell_nonce = self.trader.get_onchain_nonce().await?;
+        info!("Using on-chain nonce {} for emergency sell", sell_nonce);
 
-        let (approve_result, sell_result) = tokio::join!(
-            self.trader
-                .build_approve_tx_with_nonce(token, adjusted_amount, base_nonce, gas_price),
-            self.trader
-                .build_sell_tx_with_nonce(token, adjusted_amount, base_nonce + 1, gas_price)
-        );
-
-        let approve_tx = approve_result?;
-        let sell_tx = sell_result?;
+        // Build only sell tx — approve was already sent post-buy
+        let sell_tx = match self
+            .trader
+            .build_sell_tx_with_nonce(token, adjusted_amount, sell_nonce, gas_price)
+            .await
+        {
+            Ok(tx) => tx,
+            Err(e) => return Err(e),
+        };
 
         let block = self.trader.get_block_number().await;
-        let response = self
-            .bundle_sender
-            .send_bundle(vec![approve_tx, sell_tx], block)
-            .await?;
+
+        // Dispatch to ALL relays x 3 blocks (N, N+1, N+2) — 9 requests total
+        info!(
+            "📡 Dispatching emergency sell to all relays x 3 blocks ({}-{})",
+            block, block + 2
+        );
+        self.bundle_sender
+            .dispatch_triple_sell(vec![], sell_tx, block)
+            .await;
 
         // Remove from tracking
         self.token_memory.remove(&token);
 
-        info!("Emergency sold {} of token {:?}", adjusted_amount, token);
+        info!("Emergency sell dispatched: {} of token {:?}", adjusted_amount, token);
 
         Ok(serde_json::json!({
-            "result": response.result,
-            "error": response.error
+            "result": "dispatched to all relays",
+            "error": null
         }))
     }
 }
