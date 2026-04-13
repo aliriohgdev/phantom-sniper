@@ -1,7 +1,7 @@
 use eyre::Result;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
 use crate::config::*;
@@ -281,18 +281,30 @@ impl BundleSender {
             let tc = targets_c.clone();
 
             let h = tokio::spawn(async move {
+                // Bundle A first — give it priority since it's the ideal frontrun
                 for (block, label) in ta {
                     Self::send_single_bundle(
                         &c, &s, relay, ba.clone(), block, vec![],
                         &format!("Frontrun-{}", label), &fc, &br, &nr, a.as_deref(),
                     ).await;
                 }
+
+                // Delay ~50ms — gives relay time to process Bundle A first
+                // before B and C arrive. BSC blocks every ~0.3s, 50ms is well within window.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+
+                // Bundle B — standalone sell if A failed (nonce too low, etc)
                 for (block, label) in tb {
                     Self::send_single_bundle(
                         &c, &s, relay, bb.clone(), block, vec![],
                         &format!("FrontrunSell-{}", label), &fc, &br, &nr, a.as_deref(),
                     ).await;
                 }
+
+                // Delay ~25ms — C is at N+1 so it naturally has ~0.3s window
+                tokio::time::sleep(Duration::from_millis(25)).await;
+
+                // Bundle C — next block fallback
                 for (block, label) in tc {
                     Self::send_single_bundle(
                         &c, &s, relay, bc.clone(), block, vec![],
