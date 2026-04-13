@@ -235,13 +235,84 @@ impl BundleSender {
         }
     }
 
-    /// Dispatch sell bundle to ALL relays x 2 blocks (N, N+1).
-    /// Used for emergency sells — maximizes chance of inclusion even if blocks are full.
+    /// Dispatch frontrun sell bundle to ALL relays x 2 blocks (N, N+1).
     ///
-    /// Bundle: [sell_tx]
-    /// Strategy: 3 relays × 2 blocks = 6 requests total.
-    /// BSC blocks every ~0.3s — N to N+1 (~0.6s window) is sufficient.
-    /// Approve should already be sent post-buy — only sell needed.
+    /// Bundle A: [sell_tx, dev_tx]  → relays × block N   (frontrun: sell before dev)
+    /// Bundle B: [sell_tx]          → relays × block N   (standalone sell if A fails)
+    /// Bundle C: [sell_tx]          → relays × block N+1 (next block fallback)
+    ///
+    /// Strategy: 3 relays × 2 blocks per type = 18 requests total.
+    /// Maximize chance of selling before dev's tx lands.
+    pub async fn dispatch_frontrun(
+        &self,
+        sell_tx: Vec<u8>,
+        dev_tx: Vec<u8>,
+        current_block: u64,
+    ) {
+        let client = self.client.clone();
+        let signer = self.signer.clone();
+        let auth = self.blockrazor_auth.clone();
+        let nr_url = self.nodereal_url.clone();
+        let _48club_url = self._48club_url.clone();
+        let blockrazor_url = self.blockrazor_url.clone();
+
+        let bundle_a = vec![sell_tx.clone(), dev_tx];
+        let bundle_b = vec![sell_tx.clone()];
+        let bundle_c = vec![sell_tx];
+
+        let targets_a = vec![(current_block, "A-N")];
+        let targets_b = vec![(current_block, "B-N")];
+        let targets_c = vec![(current_block + 1, "C-N+1")];
+
+        let mut handles = Vec::with_capacity(3);
+
+        for relay in [Relay::FortyEightClub, Relay::BlockRazor, Relay::NodeReal] {
+            let c = client.clone();
+            let s = signer.clone();
+            let a = auth.clone();
+            let nr = nr_url.clone();
+            let fc = _48club_url.clone();
+            let br = blockrazor_url.clone();
+            let ba = bundle_a.clone();
+            let bb = bundle_b.clone();
+            let bc = bundle_c.clone();
+            let ta = targets_a.clone();
+            let tb = targets_b.clone();
+            let tc = targets_c.clone();
+
+            let h = tokio::spawn(async move {
+                for (block, label) in ta {
+                    Self::send_single_bundle(
+                        &c, &s, relay, ba.clone(), block, vec![],
+                        &format!("Frontrun-{}", label), &fc, &br, &nr, a.as_deref(),
+                    ).await;
+                }
+                for (block, label) in tb {
+                    Self::send_single_bundle(
+                        &c, &s, relay, bb.clone(), block, vec![],
+                        &format!("FrontrunSell-{}", label), &fc, &br, &nr, a.as_deref(),
+                    ).await;
+                }
+                for (block, label) in tc {
+                    Self::send_single_bundle(
+                        &c, &s, relay, bc.clone(), block, vec![],
+                        &format!("FrontrunSell-{}", label), &fc, &br, &nr, a.as_deref(),
+                    ).await;
+                }
+            });
+            handles.push(h);
+        }
+
+        for handle in handles {
+            if let Err(e) = handle.await {
+                warn!("Frontrun dispatch task panicked: {}", e);
+            }
+        }
+    }
+
+    /// Dispatch sell-only bundle to ALL relays x 2 blocks (N, N+1).
+    /// Used for emergency sells (no dev tx available).
+    /// 3 relays × 2 blocks = 6 requests total.
     pub async fn dispatch_triple_sell(
         &self,
         _approve_tx: Vec<u8>,
@@ -256,7 +327,6 @@ impl BundleSender {
         let blockrazor_url = self.blockrazor_url.clone();
 
         let bundle = vec![sell_tx];
-
         let targets = vec![
             (current_block, "N"),
             (current_block + 1, "N+1"),
@@ -287,7 +357,7 @@ impl BundleSender {
 
         for handle in handles {
             if let Err(e) = handle.await {
-                warn!("Relay dispatch task panicked: {}", e);
+                warn!("Sell dispatch task panicked: {}", e);
             }
         }
     }

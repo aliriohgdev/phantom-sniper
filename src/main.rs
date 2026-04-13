@@ -738,47 +738,27 @@ impl Sniper {
         };
 
         // Send frontrun bundle via Puissant
-        // Bundle order: [sell_tx, dev_sell_tx] — approve already sent post-buy
-        let result = self
-            .bundle_sender
-            .send_frontrun_bundle(vec![sell_tx], raw_tx, current_block)
+        // Dispatch to ALL relays x 2 blocks — Bundle A: [sell, dev_tx], Bundle B: [sell], Bundle C: [sell]
+        info!(
+            "\n[{}]\n{}\n🚨 FRONTRUN DISPATCHING\n{}\n  Token: {:?}\n  Our Sell: {} tokens ({:.1}% of position)\n  Dev Sell: {} tokens ({:.1}%)\n  Relays: 48Club, BlockRazor, NodeReal\n  Bundles: A[block N]=[sell+dev], B[block N]=[sell], C[block N+1]=[sell]\n{}\n",
+            timestamp, separator, separator, token, sell_amount_adjusted, dev_sell_pct, sell_amount, dev_sell_pct, separator
+        );
+        self.bundle_sender
+            .dispatch_frontrun(sell_tx, raw_tx, current_block)
             .await;
 
-        match &result {
-            Ok(resp) if resp.result.is_some() => {
-                info!("Frontrun accepted: {:?}", resp.result);
-                info!(
-                    "\n[{}]\n{}\n🚨 FRONTRUN BUNDLE SENT\n{}\n  Token: {:?}\n  Our Sell: {} tokens ({:.1}% of position)\n  Dev Sell: {} tokens ({:.1}%)\n{}\n",
-                    timestamp, separator, separator, token, sell_amount_adjusted, dev_sell_pct, sell_amount, dev_sell_pct, separator
-                );
-                // If we sold everything (dump), remove from tracking
-                if force_dump || dev_sell_pct >= *DEV_SELL_DUMP_PCT {
-                    self.token_memory.remove(&token);
-                } else {
-                    // Update our tracked position and cumulative sold
-                    if let Some(mut entry) = self.token_memory.get_mut(&token) {
-                        let sold = sell_amount_adjusted.min(entry.our_position);
-                        if !entry.our_position.is_zero() {
-                            // Adjust cost basis proportionally to tokens sold
-                            let remaining = entry.our_position.saturating_sub(sold);
-                            entry.cost_basis_bnb = entry.cost_basis_bnb
-                                * remaining
-                                / entry.our_position;
-                            entry.our_position = remaining;
-                        }
-                        entry.dev_cumulative_sold = cumulative_sold;
-                    }
+        // Update position tracking (fire-and-forget dispatch)
+        if force_dump || dev_sell_pct >= *DEV_SELL_DUMP_PCT {
+            self.token_memory.remove(&token);
+        } else {
+            if let Some(mut entry) = self.token_memory.get_mut(&token) {
+                let sold = sell_amount_adjusted.min(entry.our_position);
+                if !entry.our_position.is_zero() {
+                    let remaining = entry.our_position.saturating_sub(sold);
+                    entry.cost_basis_bnb = entry.cost_basis_bnb * remaining / entry.our_position;
+                    entry.our_position = remaining;
                 }
-            }
-            Ok(resp) => {
-                warn!("Frontrun rejected: {:?}", resp.error);
-                if resp.is_nonce_error_for(self.trader.address()) {
-                    warn!("Nonce error in frontrun, syncing...");
-                    let _ = self.trader.force_sync_nonce().await;
-                }
-            }
-            Err(e) => {
-                error!("Frontrun send failed: {}", e);
+                entry.dev_cumulative_sold = cumulative_sold;
             }
         }
 
@@ -860,27 +840,13 @@ impl Sniper {
             Err(e) => return Err(e),
         };
 
-        // Frontrun: [sell, dev_proxy_sell]
-        let result = self
-            .bundle_sender
-            .send_frontrun_bundle(vec![sell_tx], raw_tx, current_block)
+        // Frontrun: dispatch to ALL relays — Bundle A: [sell, dev_tx], B: [sell], C: [sell]
+        self.bundle_sender
+            .dispatch_frontrun(sell_tx, raw_tx, current_block)
             .await;
 
-        match &result {
-            Ok(resp) if resp.result.is_some() => {
-                info!("Proxy frontrun accepted: {:?}", resp.result);
-                self.token_memory.remove(&token);
-            }
-            Ok(resp) => {
-                warn!("Proxy frontrun rejected: {:?}", resp.error);
-                if resp.is_nonce_error_for(self.trader.address()) {
-                    let _ = self.trader.force_sync_nonce().await;
-                }
-            }
-            Err(e) => {
-                error!("Proxy frontrun send failed: {}", e);
-            }
-        }
+        // Remove from tracking (proxy sell = dump entire position)
+        self.token_memory.remove(&token);
 
         Ok(())
     }
