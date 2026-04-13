@@ -235,11 +235,12 @@ impl BundleSender {
         }
     }
 
-    /// Dispatch sell bundle to ALL relays x 3 blocks (N, N+1, N+2).
+    /// Dispatch sell bundle to ALL relays x 2 blocks (N, N+1).
     /// Used for emergency sells — maximizes chance of inclusion even if blocks are full.
     ///
     /// Bundle: [sell_tx]
-    /// Strategy: 3 relays × 3 blocks = 9 requests total.
+    /// Strategy: 3 relays × 2 blocks = 6 requests total.
+    /// BSC blocks every ~0.3s — N to N+1 (~0.6s window) is sufficient.
     /// Approve should already be sent post-buy — only sell needed.
     pub async fn dispatch_triple_sell(
         &self,
@@ -259,7 +260,6 @@ impl BundleSender {
         let targets = vec![
             (current_block, "N"),
             (current_block + 1, "N+1"),
-            (current_block + 2, "N+2"),
         ];
 
         let mut handles = Vec::with_capacity(3);

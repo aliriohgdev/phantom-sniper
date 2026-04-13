@@ -908,10 +908,10 @@ impl Sniper {
 
         let block = self.trader.get_block_number().await;
 
-        // Dispatch to ALL relays x 3 blocks (N, N+1, N+2) — 9 requests total
+        // Dispatch to ALL relays x 2 blocks (N, N+1) — 6 requests total
         info!(
-            "📡 Dispatching emergency sell to all relays x 3 blocks ({}-{})",
-            block, block + 2
+            "📡 Dispatching emergency sell to all relays x 2 blocks ({}-{})",
+            block, block + 1
         );
         self.bundle_sender
             .dispatch_triple_sell(vec![], sell_tx, block)
