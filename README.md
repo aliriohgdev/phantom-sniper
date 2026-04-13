@@ -128,8 +128,8 @@ Bundles are dispatched to **all configured relays in parallel** for ~65-70% bloc
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `POSITION_VERIFY_DELAY_SECS` | `9` | Seconds to wait after backrun to verify token balance |
-| `POSITION_TTL_SECS` | `1800` | Max hold time before auto-sell (seconds, 0 = disabled) |
+| `POSITION_VERIFY_DELAY_SECS` | `1` | Seconds to wait after backrun to verify token balance |
+| `STAGNATION_TTL_SECS` | `120` | Auto-sell if trySell value doesn't change for this long (seconds) |
 | `TAKE_PROFIT_PCT` | `0` | Sell when profit hits this % above cost (50 = 50% profit, 0 = disabled) |
 | `STOP_LOSS_PCT` | `0` | Trailing stop-loss: sell if value drops this % below peak (30 = 30% drop, 0 = disabled) |
 | `PROFIT_CHECK_INTERVAL_SECS` | `1` | How often to check profit targets and stop-loss (seconds) |

@@ -210,13 +210,14 @@ pub static POSITION_VERIFY_DELAY_SECS: LazyLock<u64> = LazyLock::new(|| {
         .unwrap_or(1)
 });
 
-/// Max seconds to hold a position before auto-selling (default: 1800 = 30 min).
-/// If dev hasn't sold within this time, we sell automatically to free capital.
-pub static POSITION_TTL_SECS: LazyLock<u64> = LazyLock::new(|| {
-    env::var("POSITION_TTL_SECS")
+/// Max seconds to hold a position before auto-selling if price stagnates (default: 120 = 2 min).
+/// If price changes (up or down), the timer resets.
+/// If price stays flat for this long, we sell to avoid dead tokens.
+pub static STAGNATION_TTL_SECS: LazyLock<u64> = LazyLock::new(|| {
+    env::var("STAGNATION_TTL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(1800)
+        .unwrap_or(120)
 });
 
 /// Take-profit target as percentage of cost basis.

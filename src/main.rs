@@ -29,6 +29,8 @@ struct TokenInfo {
     our_position: U256,        // current token balance
     cost_basis_bnb: U256,      // BNB we spent to buy
     peak_value_bnb: U256,      // highest BNB value seen (trailing stop-loss anchor)
+    last_value_bnb: U256,      // last known trySell value (for stagnation detection)
+    last_value_update: std::time::Instant, // last time value changed
     dev_initial_balance: U256, // dev token balance right after creation
     dev_cumulative_sold: U256, // total tokens dev has sold so far
     created_at: std::time::Instant, // when we entered this position
@@ -266,12 +268,6 @@ impl Sniper {
     ) -> Result<()> {
         use chrono::Utc;
 
-        // TEST MODE: only hold 1 token at a time — skip new buys if we already have a position
-        if !self.token_memory.is_empty() {
-            info!("⏭️  Skipping new token: already holding a position (test mode — 1 token max)");
-            return Ok(());
-        }
-
         info!("NEW TOKEN LAUNCH detected from dev: {:?}", from_addr);
 
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
@@ -444,6 +440,8 @@ impl Sniper {
                     our_position: balance,
                     cost_basis_bnb: buy_amount_for_verify,
                     peak_value_bnb: buy_amount_for_verify,
+                    last_value_bnb: U256::ZERO,
+                    last_value_update: std::time::Instant::now(),
                     dev_initial_balance: dev_balance,
                     dev_cumulative_sold: U256::ZERO,
                     created_at: std::time::Instant::now(),
@@ -460,6 +458,8 @@ impl Sniper {
                     our_position: U256::ZERO,
                     cost_basis_bnb: buy_amount_for_verify,
                     peak_value_bnb: U256::ZERO,
+                    last_value_bnb: U256::ZERO,
+                    last_value_update: std::time::Instant::now(),
                     dev_initial_balance: U256::ZERO,
                     dev_cumulative_sold: U256::ZERO,
                     created_at: std::time::Instant::now(),
@@ -965,42 +965,23 @@ async fn main() -> Result<()> {
                 sniper_cleanup.dev_creates.len(),
                 sniper_cleanup.token_memory.len(),
             );
-
-            // Auto-sell stale positions (dev never sold within TTL)
-            let ttl = std::time::Duration::from_secs(*POSITION_TTL_SECS);
-            if *POSITION_TTL_SECS > 0 {
-                let now_inst = std::time::Instant::now();
-                let stale_tokens: Vec<(Address, U256)> = sniper_cleanup
-                    .token_memory
-                    .iter()
-                    .filter(|entry| now_inst.duration_since(entry.created_at) > ttl)
-                    .map(|entry| (entry.token, entry.our_position))
-                    .collect();
-
-                for (token, position) in stale_tokens {
-                    warn!(
-                        "⏰ Position TTL expired for {:?} (held > {}s), auto-selling",
-                        token, *POSITION_TTL_SECS
-                    );
-                    if let Err(e) = sniper_cleanup.emergency_sell(token, position).await {
-                        error!("Auto-sell failed for {:?}: {}", token, e);
-                    }
-                }
-            }
         }
     });
 
-    // Spawn take-profit + trailing stop-loss monitor.
+    // Spawn take-profit + trailing stop-loss + stagnation monitor.
     // Uses HelperManager.trySell for exact BNB output (after fees), no approximations.
     // - Take-profit: sell when current value >= cost * (1 + TAKE_PROFIT_PCT/100)
     // - Trailing stop-loss: sell when current value < peak * (1 - STOP_LOSS_PCT/100)
     //   Peak is updated every check if current value > previous peak.
+    // - Stagnation: sell if value hasn't changed for STAGNATION_TTL_SECS (dead token).
     let has_tp = *TAKE_PROFIT_PCT > 0.0;
     let has_sl = *STOP_LOSS_PCT > 0.0;
-    if has_tp || has_sl {
+    let has_stagnation = *STAGNATION_TTL_SECS > 0;
+    if has_tp || has_sl || has_stagnation {
         let sniper_monitor = Arc::clone(&sniper);
         let tp_target = *TAKE_PROFIT_PCT;
         let sl_target = *STOP_LOSS_PCT;
+        let stagnation_ttl_secs = *STAGNATION_TTL_SECS;
         tokio::spawn(async move {
             loop {
                 sleep(Duration::from_secs(*PROFIT_CHECK_INTERVAL_SECS)).await;
@@ -1083,6 +1064,29 @@ async fn main() -> Result<()> {
                                         );
                                         if let Err(e) = sniper_monitor.emergency_sell(token, info.our_position).await {
                                             error!("Take-profit sell failed for {:?}: {}", token, e);
+                                        }
+                                        continue; // Sold, go to next token
+                                    }
+                                }
+                            }
+
+                            // ---- Check price stagnation (dead token detection) ----
+                            if has_stagnation {
+                                if let Some(mut entry) = sniper_monitor.token_memory.get_mut(&token) {
+                                    if bnb_out != entry.last_value_bnb {
+                                        // Price moved (up or down) — token is alive, reset timer
+                                        entry.last_value_bnb = bnb_out;
+                                        entry.last_value_update = std::time::Instant::now();
+                                    } else if entry.last_value_update.elapsed().as_secs() >= stagnation_ttl_secs {
+                                        // Price stagnant — dump immediately
+                                        warn!(
+                                            "💤 STAGNANT PRICE for {:?} ({} BNB for > {}s) → dumping",
+                                            token,
+                                            alloy::primitives::utils::format_ether(bnb_out),
+                                            stagnation_ttl_secs
+                                        );
+                                        if let Err(e) = sniper_monitor.emergency_sell(token, info.our_position).await {
+                                            error!("Stagnation sell failed for {:?}: {}", token, e);
                                         }
                                     }
                                 }
